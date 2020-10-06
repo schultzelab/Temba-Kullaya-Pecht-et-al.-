@@ -1,0 +1,180 @@
+---
+title: "Trehalose_limma_DE analysis"
+output: html_document
+---
+
+## Download GSE76643_non-normalized.txt.gz: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE76643
+## Download GPL14951-11332.txt: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GPL14951
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. R setup
+## Install required packages
+if needed
+```{r, eval=FALSE}
+# knitr::opts_chunk$set()
+# 
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("illuminaHumanv4.db")
+```
+
+## require packages
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = T,
+                      results = "hide")
+
+library(illuminaHumanv4.db)
+library(limma)
+
+```
+
+
+
+
+# 2. import GSE76643 non-normalized file
+
+### set your directory
+```{r}
+
+dir<-"C:/Users/Mein Pc/sciebo/Tal/TransMic/Tanzania/TransMic analysis 2019/Trehalose analysis/Analysis for revision/24-06-20/other limma approach"
+```
+
+### import 
+```{r}
+maqc  <- read.ilmn(files = paste0(dir,"/GSE76643_non-normalized.txt"),probeid="ID_REF",expr="AVG_Signal", other.columns = c("Detection"))
+
+```
+
+```{r}
+boxplot(log2(maqc$E),range=0,ylab="log2 intensity")
+```
+
+## subset for control and trehalose treated cells
+```{r}
+subset<-maqc
+
+subset$other$Detection<-subset$other$Detection[,c(7:12)]
+subset$E<-subset$E[,c(7:12)]
+```
+
+
+# 2. Normalize and log transform
+neqc performs background correction followed by quantile normalization. 
+neqc continues on to quantile normalize the background-corrected intensities, including control probes. 
+After normalization, the intensities are log2 transformed and the control probes are removed.
+
+
+```{r}
+y <- neqc(subset,detection.p=subset$other$Detection)
+dim(y)
+```
+
+## 2.1. filter low expressed probes
+Filter out probes that are not expressed. 
+
+```{r}
+expressed <- rowSums(y$other$Detection < 0.05) >= 6
+y <- y[expressed,]
+dim(y)
+```
+
+```{r}
+maqc.norm<-y
+
+dim(maqc.norm)
+
+
+boxplot(log2(maqc$E),range = 0, las = 2, xlab = "", ylab = expression(log [2](intensity)),main = "Regular  probes")
+
+
+boxplot(maqc.norm$E, range = 0, ylab = expression(log [2](intensity)),las = 2, xlab = "", main = "Regular  probes , NEQC  normalized")
+```
+
+
+# 3. Plot PCA
+```{r}
+plotMDS(maqc.norm$E)
+```
+
+
+
+# 4. Exclude low quality probes
+```{r}
+
+illuminaHumanv4()
+ids  <- as.character(rownames(maqc.norm))
+ids2  <- unlist(mget(ids , revmap(illuminaHumanv4ARRAYADDRESS),ifnotfound = NA))
+qual  <- unlist(mget(names(ids2) , illuminaHumanv4PROBEQUALITY ,ifnotfound = NA))
+table(qual)
+```
+```{r}
+AveSignal = rowMeans(maqc.norm$E)
+boxplot(AveSignal ~ qual)
+
+```
+ 
+ 
+```{r}
+rem  <- qual == "No match" | qual == "Bad"
+maqc.norm.filt  <- maqc.norm[!rem , ]
+dim(maqc.norm)
+dim(maqc.norm.filt)
+```
+ 
+# 5. Preform lm DE analysis
+```{r}
+ rna <- factor(rep(c("TR","UT") , each = 3))
+design <- model.matrix (~0 + rna )
+colnames(design) <- levels(rna)
+fit<-lmFit (maqc.norm.filt
+            , design )
+contrasts <- makeContrasts ( TR - UT , levels = design )
+contr.fit <- eBayes(contrasts.fit(fit,contrasts ))
+
+
+Ttable<-topTable ( contr.fit , coef = 1,adjust="fdr", number=Inf, p.value=0.2)
+```
+
+
+```{r}
+#plots
+par(mfrow = c(1,2))
+volcanoplot ( contr.fit , main = "TR - UT")
+smoothScatter (contr.fit$Amean , contr.fit$coef , xlab = " average intensity " ,ylab = " log - ratio " )+abline (h = 0, col = 2 , lty = 2)
+```
+
+
+# 6. Get annotation
+```{r echo=TRUE, results="markup"}
+ilum_anno<-read.delim(file=paste0(dir, "/GPL14951-11332.txt"),header=T,sep="\t", skip=28)
+row.names(ilum_anno)<-ilum_anno$ID
+
+symbol_ILMN<-ilum_anno[,c("Symbol"), drop=F]
+
+Ttable$regulation<-""
+Ttable[Ttable$logFC>log(1.2) & Ttable$P.Value<0.01,"regulation"]<-"up"
+Ttable[Ttable$logFC<(-log(1.2)) & Ttable$P.Value<0.01,"regulation"]<-"down"
+
+df_table<-Ttable[Ttable$regulation!="",]
+
+df_table<-merge(df_table,symbol_ILMN, by="row.names")
+
+head(df_table)
+
+```
+```{r echo=TRUE, results="markup"}
+print(paste("Number of upregulated DE genes =",dim(df_table[df_table$regulation=="up",])[1]," Number of downregulated DE genes =",dim(df_table[df_table$regulation=="down",])[1]))
+```
+
+```{r}
+tre_up<-as.character(df_table[df_table$regulation=="up","Symbol"])
+tre_down<-as.character(df_table[df_table$regulation=="down","Symbol"])
+```
+
+
+
