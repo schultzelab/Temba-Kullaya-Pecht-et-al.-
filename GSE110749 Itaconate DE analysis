@@ -1,0 +1,194 @@
+---
+title: "Itaconate Limma - Revision -Final"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#1. R requirements
+
+```{r}
+library(edgeR)
+require(gtools)
+require(biomaRt)
+```
+
+# 2. Custom functions
+```{r}
+# Basic function to convert mouse to human gene names
+convertMouseGeneList <- function(x){
+ 
+genesV2 = getLDS(attributes = c("mgi_symbol"), filters = "mgi_symbol", values = x , mart = mouse, attributesL = c("hgnc_symbol"), martL = human, uniqueRows=T)
+humanx <- unique(genesV2[, 2])
+ 
+# Print the first 6 genes found to the screen
+print(head(humanx))
+return(humanx)
+}
+
+```
+
+3. Import data
+
+## Define dir
+```{r}
+dir<-"c:/..." #write directory of files here
+```
+## Load sample table
+Now, we read a table containing all available metainformation for the samples. 
+```{r sample table import}
+sample_table <- read.delim(file.path(dir, "Data", "sample_table_itaconate.txt"))
+rownames(sample_table) <- sample_table$ID
+sample_table
+```
+## import counts table
+
+```{r}
+counts<-read.delim(file.path(dir, "/GSE110749_counts.txt"), stringsAsFactors = FALSE)
+names(counts)[names(counts) == "X"] <- "GENEID"
+row.names(counts)<-counts$GENEID
+
+```
+
+## adjust counts table
+```{r}
+samples_to_keep<-row.names(sample_table[sample_table$stimulation_time=="0",])
+counts<-counts[,names(counts)%in%samples_to_keep]
+```
+
+
+# 4. Create DGEList object
+```{r}
+d0 <- DGEList(counts)
+```
+
+## 4.1. Preprocessing
+Calculate normalization factors
+calculates normalization factors for use downstream.
+```{r}
+d0 <- calcNormFactors(d0)
+d0
+```
+
+
+
+## 4.2. Filter low-expressed genes
+
+
+```{r}
+genes_to_keep <- rowSums(counts) >= 8
+
+d<-d0[genes_to_keep,]
+dim(d)
+```
+
+## 4.3. set names
+```{r}
+snames <- colnames(counts) # Sample names
+snames
+```
+
+```{r}
+group <- substr(snames, 1, nchar(snames) - 10) 
+group
+```
+
+```{r}
+plotMDS(d, col = as.numeric(group))
+```
+
+# 4.4. Voom transformation and calculation of variance weights
+Specify the model to be fitted. We do this before using voom since voom uses variances of the model residuals (observed - fitted)
+```{r}
+mm <- model.matrix(~0 + group)
+mm
+```
+
+
+Voom
+
+```{r}
+y <- voom(d, mm, plot = T)
+```
+
+
+```{r}
+tmp <- voom(d0, mm, plot = T)
+```
+
+# 5. Fitting linear models in limma
+lmFit fits a linear model using weighted least squares for each gene:
+
+```{r}
+fit <- lmFit(y, mm)
+head(coef(fit))
+```
+
+set contrasts
+```{r}
+contr <- makeContrasts(groupDI - groupCtrl, levels = colnames(coef(fit)))
+contr
+```
+
+Estimate contrast for each gene
+```{r}
+
+tmp <- contrasts.fit(fit, contr)
+tmp <- eBayes(tmp)
+top.table <- topTable(tmp, sort.by = "P", n = Inf, adjust.method = "fdr", p.value = 0.2)
+head(top.table, 20)
+```
+## Number of total DE genes p<0.01
+```{r}
+length(which(top.table$P.Value < 0.01))
+```
+
+# create DF table
+```{r}
+top.table2<-top.table
+top.table2$FC<-logratio2foldchange(top.table2$logFC)
+top.table2$regulation<-""
+top.table2[top.table2$logFC>log2(1.2) & top.table2$P.Value<0.01,"regulation"]<-"up"
+top.table2[top.table2$logFC<(-(log2(1.2)))& top.table2$P.Value<0.01,"regulation"]<-"down"
+
+print(paste("number of upregulated genes=",nrow(top.table2[top.table2$regulation=="up",])," and the number of downregulated genes=",nrow(top.table2[top.table2$regulation=="down",])))
+
+```
+
+# Add mouse symbols to DE genes and convert to human symbols
+```{r}
+# Convert to mouse symbols
+library("org.Mm.eg.db")
+
+SYMBOL<-mapIds(org.Mm.eg.db, keys = rownames(top.table2), keytype = "ENSEMBL", column="SYMBOL")
+
+SYMBOL<-as.data.frame(SYMBOL, stringsAsFactors=FALSE)
+
+df_genes<-merge(top.table2,SYMBOL,by="row.names")
+
+
+# Convert to human symbols
+human = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+mouse = useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+
+df_symbol_hs<-getLDS(attributes = c("mgi_symbol"), filters = "mgi_symbol", values = df_genes$SYMBOL , mart = mouse, attributesL = c("hgnc_symbol"), martL = human, uniqueRows=T)
+uniqu_df_symbol_hs <- (df_symbol_hs[!duplicated(df_symbol_hs$HGNC.symbol),])
+
+df_genes$SYMBOL_hs<-uniqu_df_symbol_hs[match(df_genes$SYMBOL,uniqu_df_symbol_hs$MGI.symbol),"HGNC.symbol"]
+
+
+df_table<-df_genes
+```
+
+```{r echo=TRUE, results="markup"}
+print(paste("Number of upregulated DE genes =",dim(df_table[df_table$regulation=="up",])[1]," Number of downregulated DE genes =",dim(df_table[df_table$regulation=="down",])[1]))
+```
+
+```{r}
+ita_up<-as.character(df_table[df_table$regulation=="up","SYMBOL_hs"])
+ita_down<-as.character(df_table[df_table$regulation=="down","SYMBOL_hs"])
+```
+
+
