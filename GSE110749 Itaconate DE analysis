@@ -4,7 +4,7 @@ output: html_document
 ---
 
 ## Download GSE110749_counts.txt.gz:  https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE110749
-## sample_table_itaconate.txt file is available in the previous directory: https://github.com/TalPecht/Temba-et-al.-Nature-Immunology 
+## sample_table_itaconate.txt file is available in the previous directory: https://github.com/TalPecht/Temba-Kullaya-Pecht-et-al.-
 
 
 ```{r setup, include=FALSE}
